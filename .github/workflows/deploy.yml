@@ -77,9 +77,10 @@ jobs:
 
       # Generate requirements.txt into src/ — that's where CodeUri points, so SAM
       # picks it up automatically. --no-dev keeps boto3 out of the Lambda package
-      # (it's provided by the Lambda runtime).
+      # (it's provided by the Lambda runtime). --no-emit-project omits the local
+      # package itself (-e .) which breaks pip inside the SAM Linux container.
       - name: Export requirements.txt
-        run: uv export --no-dev --no-hashes --output-file src/requirements.txt
+        run: uv export --no-dev --no-hashes --no-emit-project --output-file src/requirements.txt
 
       # Create the model-artifact bucket if it doesn't already exist.
       # The conditional avoids the LocationConstraint error for us-east-1.
