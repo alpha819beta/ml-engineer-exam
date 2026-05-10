@@ -1,0 +1,17 @@
+# SAM CLI configuration — stores default parameters so the deploy workflow
+# doesn't need to repeat them as flags on every run.
+version = 0.1
+
+[default.global.parameters]
+stack_name = "ml-housing-inference"
+region     = "us-east-1"
+
+[default.build.parameters]
+cached   = true
+parallel = true
+template = "infrastructure/template.yaml"
+
+[default.deploy.parameters]
+confirm_changeset      = false
+fail_on_empty_changeset = false
+capabilities           = "CAPABILITY_IAM"

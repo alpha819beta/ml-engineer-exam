@@ -1,0 +1,19 @@
+# Files excluded from the Lambda deployment package.
+# Keeps the package lean by stripping dev/CI assets that serve no runtime purpose.
+.git/
+.github/
+.idea/
+tests/
+infrastructure/
+*.md
+uv.lock
+.gitignore
+.gitattributes
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+requirements.txt

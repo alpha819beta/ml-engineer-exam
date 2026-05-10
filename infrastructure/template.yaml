@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Serverless ML inference endpoint for California housing price prediction
+
+Parameters:
+  S3BucketName:
+    Type: String
+    Description: S3 bucket that stores the pre-trained model artifacts (.joblib files)
+  ModelPrefix:
+    Type: String
+    Default: models
+    Description: S3 key prefix under which model files are stored
+  DefaultModelName:
+    Type: String
+    Default: linear
+    AllowedValues: [linear, ridge, random_forest]
+    Description: Model variant used when no model_name query param is provided
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+
+Globals:
+  Function:
+    Timeout: 60
+    MemorySize: 512
+    Runtime: python3.12
+    Architectures: [x86_64]
+    Environment:
+      Variables:
+        S3_BUCKET: !Ref S3BucketName
+        MODEL_PREFIX: !Ref ModelPrefix
+        DEFAULT_MODEL_NAME: !Ref DefaultModelName
+        ENVIRONMENT: !Ref Environment
+
+Resources:
+  PredictionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ml-housing-inference-${Environment}
+      # src/ has no pyproject.toml, so SAM installs requirements.txt and copies
+      # ml_engineer_exam/ directly without trying to build the local package.
+      CodeUri: ../src/
+      Handler: ml_engineer_exam.lambda_handler.handler
+      Description: Serverless inference endpoint for California housing price prediction
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref S3BucketName
+      Events:
+        PredictPost:
+          Type: HttpApi
+          Properties:
+            Path: /predict
+            Method: POST
+        HealthGet:
+          Type: HttpApi
+          Properties:
+            Path: /health
+            Method: GET
+
+Outputs:
+  PredictEndpoint:
+    Description: "POST JSON housing features here to receive a price prediction"
+    Value: !Sub https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/predict
+  HealthEndpoint:
+    Description: "GET this URL to verify the service is running"
+    Value: !Sub https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/health
+  FunctionArn:
+    Description: Lambda Function ARN
+    Value: !GetAtt PredictionFunction.Arn
+  FunctionName:
+    Description: Lambda Function Name
+    Value: !Ref PredictionFunction

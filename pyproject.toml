@@ -16,6 +16,12 @@ dev = [
     "pytest>=8.0.0",
     "pytest-cov>=4.1.0",
 ]
+# Install this group when running the Lambda handler locally (boto3 is
+# provided by the Lambda runtime and intentionally excluded from the
+# Lambda deployment package to keep it small).
+lambda = [
+    "boto3>=1.38.0",
+]
 
 [project.scripts]
 run_model_training = "ml_engineer_exam.scripts.run_model_training:main"

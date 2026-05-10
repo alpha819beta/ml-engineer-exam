@@ -1,0 +1,136 @@
+name: Deploy ML Inference
+
+on:
+  push:
+    branches: [main]
+  # Allow manual deploys with optional overrides
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target deployment environment
+        required: true
+        default: prod
+        type: choice
+        options: [dev, staging, prod]
+      model_name:
+        description: Default model variant to serve
+        required: false
+        default: linear
+        type: choice
+        options: [linear, ridge, random_forest]
+
+env:
+  ENVIRONMENT: ${{ github.event.inputs.environment || 'prod' }}
+  DEFAULT_MODEL_NAME: ${{ github.event.inputs.model_name || 'linear' }}
+
+jobs:
+  # ── 1. Tests must pass before any deployment ────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run tests
+        run: uv run pytest tests/ -v
+
+  # ── 2. Build and deploy to AWS ──────────────────────────────────────────────
+  deploy:
+    name: Deploy to AWS (${{ github.event.inputs.environment || 'prod' }})
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # required for OIDC-based AWS auth (future improvement)
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Install SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      # Generate requirements.txt into src/ — that's where CodeUri points, so SAM
+      # picks it up automatically. --no-dev keeps boto3 out of the Lambda package
+      # (it's provided by the Lambda runtime).
+      - name: Export requirements.txt
+        run: uv export --no-dev --no-hashes --output-file src/requirements.txt
+
+      # Create the model-artifact bucket if it doesn't already exist.
+      # The conditional avoids the LocationConstraint error for us-east-1.
+      - name: Create model artifact bucket
+        run: |
+          REGION="${{ secrets.AWS_REGION }}"
+          BUCKET="${{ secrets.S3_BUCKET_NAME }}"
+          if [ "$REGION" = "us-east-1" ]; then
+            aws s3api create-bucket --bucket "$BUCKET" --region "$REGION" 2>&1 \
+              | grep -v "BucketAlreadyOwnedByYou" || true
+          else
+            aws s3api create-bucket --bucket "$BUCKET" --region "$REGION" \
+              --create-bucket-configuration LocationConstraint="$REGION" 2>&1 \
+              | grep -v "BucketAlreadyOwnedByYou" || true
+          fi
+
+      # Push model artifacts. --delete removes any stale model files from S3.
+      - name: Upload model artifacts to S3
+        run: |
+          aws s3 sync data/models/ s3://${{ secrets.S3_BUCKET_NAME }}/models/ \
+            --delete \
+            --no-progress
+
+      # --use-container ensures compiled extensions (numpy/scikit-learn) are
+      # built against Amazon Linux, matching the Lambda runtime.
+      - name: SAM build
+        run: |
+          sam build \
+            --template infrastructure/template.yaml \
+            --use-container
+
+      # --resolve-s3 lets SAM auto-create/manage the artifact upload bucket so
+      # we don't need a separate SAM_ARTIFACT_BUCKET secret.
+      - name: SAM deploy
+        run: |
+          sam deploy \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --stack-name ml-housing-inference-${{ env.ENVIRONMENT }} \
+            --resolve-s3 \
+            --parameter-overrides \
+              S3BucketName=${{ secrets.S3_BUCKET_NAME }} \
+              Environment=${{ env.ENVIRONMENT }} \
+              DefaultModelName=${{ env.DEFAULT_MODEL_NAME }} \
+            --capabilities CAPABILITY_IAM \
+            --region ${{ secrets.AWS_REGION }}
+
+      - name: Print deployment outputs
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name ml-housing-inference-${{ env.ENVIRONMENT }} \
+            --region ${{ secrets.AWS_REGION }} \
+            --query 'Stacks[0].Outputs' \
+            --output table
